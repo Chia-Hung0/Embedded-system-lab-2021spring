@@ -28,105 +28,68 @@
 
 #define WIFI_IDW0XX1    2
 
-#if (defined(TARGET_DISCO_L475VG_IOT01A) || defined(TARGET_DISCO_F413ZH))
 #include "ISM43362Interface.h"
 ISM43362Interface wifi(false);
-
-#else // External WiFi modules
-
-#if MBED_CONF_APP_WIFI_SHIELD == WIFI_IDW0XX1
-#include "SpwfSAInterface.h"
-SpwfSAInterface wifi(MBED_CONF_APP_WIFI_TX, MBED_CONF_APP_WIFI_RX);
-#endif // MBED_CONF_APP_WIFI_SHIELD == WIFI_IDW0XX1
-
-#endif
-
-#define SCALE_MULTIPLIER    0.004
-
-
-const char *sec2str(nsapi_security_t sec)
-{
-    switch (sec) {
-        case NSAPI_SECURITY_NONE:
-            return "None";
-        case NSAPI_SECURITY_WEP:
-            return "WEP";
-        case NSAPI_SECURITY_WPA:
-            return "WPA";
-        case NSAPI_SECURITY_WPA2:
-            return "WPA2";
-        case NSAPI_SECURITY_WPA_WPA2:
-            return "WPA/WPA2";
-        case NSAPI_SECURITY_UNKNOWN:
-        default:
-            return "Unknown";
-    }
+InterruptIn button(BUTTON1);
+bool pressed = false;
+void button_pressed(){
+    pressed = true;
 }
-
-int scan_demo(WiFiInterface *wifi)
-{
-    WiFiAccessPoint *ap;
-
-    printf("Scan:\n");
-
-    int count = wifi->scan(NULL,0);
-    printf("%d networks available.\n", count);
-
-    /* Limit number of network arbitrary to 15 */
-    count = count < 15 ? count : 15;
-
-    ap = new WiFiAccessPoint[count];
-    count = wifi->scan(ap, count);
-    for (int i = 0; i < count; i++)
-    {
-        printf("Network: %s secured: %s BSSID: %hhX:%hhX:%hhX:%hhx:%hhx:%hhx RSSI: %hhd Ch: %hhd\n", ap[i].get_ssid(),
-               sec2str(ap[i].get_security()), ap[i].get_bssid()[0], ap[i].get_bssid()[1], ap[i].get_bssid()[2],
-               ap[i].get_bssid()[3], ap[i].get_bssid()[4], ap[i].get_bssid()[5], ap[i].get_rssi(), ap[i].get_channel());
-    }
-
-    delete[] ap;
-    return count;
+void button_released(){
+    pressed = false;
 }
-
 void acc_server(NetworkInterface *net)
 {
-    /* 
-    TCPServer socket;
-    TCPSocket* client;*/
     TCPSocket socket;
-    SocketAddress addr("192.168.0.145",65431);
+    SocketAddress addr("192.168.50.179", 10024);
     nsapi_error_t response;
 
     int16_t pDataXYZ[3] = {0};
     char recv_buffer[9];
     char acc_json[64];
     int sample_num = 0;
-
-    
-
     // Open a socket on the network interface, and create a TCP connection to addr
     response = socket.open(net);
     if (0 != response){
         printf("Error opening: %d\n", response);
     }
     response = socket.connect(addr);
-    
     if (0 != response){
         printf("Error connecting: %d\n", response);
     }
-
-
     socket.set_blocking(1);
     while (1){
+        button.fall(&button_pressed);
+        button.rise(&button_released);
         ++sample_num;
+        int up, right;
         BSP_ACCELERO_AccGetXYZ(pDataXYZ);
-        float x = pDataXYZ[0]*SCALE_MULTIPLIER, y = pDataXYZ[1]*SCALE_MULTIPLIER, z = pDataXYZ[2]*SCALE_MULTIPLIER;
-        int len = sprintf(acc_json,"{\"x\":%d,\"y\":%d,\"z\":%d,\"s\":%d}",(float)((int)(x*10000))/10000, (float)((int)(y*10000))/10000, (float)((int)(z*10000))/10000, sample_num);
-        response = socket.send(acc_json,len);
+        int x = pDataXYZ[0], y = pDataXYZ[1], z = pDataXYZ[2];
+        if (pressed){
+            if (y > 0){
+                up = 0;
+                right = 1;
+            }
+            else{
+                up = 2;
+                right = 1;
+            }
+        }
+        else{
+            up = 1;
+            if (x > 0){
+                right = 0;
+            }
+            else{
+                right = 2;
+            }
+        }
+        int len = sprintf(acc_json, "{%d,%d}", up, right);
+        response = socket.send(acc_json, len);
         if (0 >= response){
             printf("Error sending: %d\n", response);
         }
-        rtos::ThisThread::sleep_for(0.1);
+        rtos::ThisThread::sleep_for(100);
     }
     socket.close();
 }
@@ -146,6 +109,6 @@ int main()
     printf("Netmask: %s\n", wifi.get_netmask());
     printf("Gateway: %s\n", wifi.get_gateway());
     printf("RSSI: %d\n\n", wifi.get_rssi());
-    BSP_ACCELERO_Init();   
+    BSP_ACCELERO_Init();
     acc_server(&wifi);
 }
